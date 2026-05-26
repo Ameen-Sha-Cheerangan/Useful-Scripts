@@ -1,0 +1,262 @@
+import os
+from pathlib import Path
+
+# ======================
+# CONFIGURATION
+# ======================
+
+ROOT_DIR = Path(".").resolve()
+
+STRUCTURE_OUTPUT = "project_structure.txt"
+CONTENT_OUTPUT = "project_context.txt"
+
+# Hardcoded folders/files to ignore
+IGNORE_DIRS = {
+    ".git",
+    "analysis",
+    "__pycache__",
+    "gril-3.8-venv",
+    "misc",
+}
+
+IGNORE_FILES = {
+    ".gitignore",
+    "gil.h5",
+    "gil.log",
+    "README.md",
+    "project_context.txt",
+    "project_structure.txt"
+}
+
+# Extensions to skip
+IGNORE_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".webp",
+    ".ico",
+    ".pdf",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mp3",
+    ".wav",
+    ".exe",
+    ".dll",
+    ".so",
+    ".class",
+    ".jar",
+}
+
+MAX_FILE_SIZE_MB = 2
+MAX_DEPTH = 50
+
+
+# ======================
+# INTERNAL STATE
+# ======================
+
+visited_real_paths = set()
+
+
+# ======================
+# HELPERS
+# ======================
+
+def should_ignore(path: Path):
+    name = path.name
+
+    if name in IGNORE_FILES:
+        return True
+
+    if name in IGNORE_DIRS:
+        return True
+
+    if path.suffix.lower() in IGNORE_EXTENSIONS:
+        return True
+
+    return False
+
+
+def is_binary(file_path):
+    try:
+        with open(file_path, "rb") as f:
+            chunk = f.read(1024)
+            return b"\0" in chunk
+    except:
+        return True
+
+
+def safe_file_size(path):
+    try:
+        return path.stat().st_size
+    except:
+        return 0
+
+
+# ======================
+# STRUCTURE WRITER
+# ======================
+
+def write_tree(path, out, prefix="", depth=0):
+
+    if depth > MAX_DEPTH:
+        out.write(prefix + "MAX_DEPTH_REACHED\n")
+        return
+
+    try:
+        real_path = path.resolve()
+
+        if real_path in visited_real_paths:
+            out.write(prefix + "[Already visited]\n")
+            return
+
+        visited_real_paths.add(real_path)
+
+        items = sorted(
+            path.iterdir(),
+            key=lambda x: (x.is_file(), x.name.lower())
+        )
+
+        for i, item in enumerate(items):
+
+            if should_ignore(item):
+                continue
+
+            connector = "└── " if i == len(items)-1 else "├── "
+
+            out.write(
+                f"{prefix}{connector}{item.name}\n"
+            )
+
+            if item.is_dir() and not item.is_symlink():
+
+                extension = (
+                    "    " if i == len(items)-1
+                    else "│   "
+                )
+
+                write_tree(
+                    item,
+                    out,
+                    prefix + extension,
+                    depth + 1
+                )
+
+    except Exception as e:
+        out.write(f"{prefix}[ERROR: {e}]\n")
+
+
+# ======================
+# CONTENT WRITER
+# ======================
+
+def dump_contents(path, out, depth=0):
+
+    if depth > MAX_DEPTH:
+        return
+
+    try:
+
+        for item in sorted(path.iterdir()):
+
+            if should_ignore(item):
+                continue
+
+            if item.is_symlink():
+                continue
+
+            if item.is_dir():
+                dump_contents(item, out, depth+1)
+
+            elif item.is_file():
+
+                size = safe_file_size(item)
+
+                if size > MAX_FILE_SIZE_MB * 1024 * 1024:
+                    out.write(
+                        f"\n{'='*80}\n"
+                        f"FILE: {item}\n"
+                        f"SKIPPED: Too large ({size/(1024*1024):.2f} MB)\n"
+                        f"{'='*80}\n"
+                    )
+                    continue
+
+                if is_binary(item):
+                    out.write(
+                        f"\n{'='*80}\n"
+                        f"FILE: {item}\n"
+                        f"SKIPPED: Binary file\n"
+                        f"{'='*80}\n"
+                    )
+                    continue
+
+                try:
+                    content = item.read_text(
+                        encoding="utf-8",
+                        errors="replace"
+                    )
+
+                    out.write(
+                        f"\n{'='*100}\n"
+                        f"FILE PATH: {item.relative_to(ROOT_DIR)}\n"
+                        f"EXTENSION: {item.suffix}\n"
+                        f"SIZE: {size} bytes\n"
+                        f"{'='*100}\n\n"
+                    )
+
+                    out.write(content)
+                    out.write("\n\n")
+
+                except Exception as e:
+
+                    out.write(
+                        f"\n{'='*80}\n"
+                        f"FILE: {item}\n"
+                        f"ERROR: {str(e)}\n"
+                        f"{'='*80}\n"
+                    )
+
+    except Exception as e:
+        print(e)
+
+
+# ======================
+# MAIN
+# ======================
+
+def main():
+
+    print("Generating structure...")
+
+    with open(
+        STRUCTURE_OUTPUT,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        f.write(f"PROJECT ROOT: {ROOT_DIR}\n\n")
+        write_tree(ROOT_DIR, f)
+
+    print("Generating content dump...")
+
+    with open(
+        CONTENT_OUTPUT,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        dump_contents(ROOT_DIR, f)
+
+    print("\nDone.")
+    print(f"Structure: {STRUCTURE_OUTPUT}")
+    print(f"Context: {CONTENT_OUTPUT}")
+
+
+if __name__ == "__main__":
+    main()
